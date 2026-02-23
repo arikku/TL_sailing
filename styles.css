@@ -1,0 +1,31 @@
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: #060a10;
+  color: #d7dde8;
+  font-family: "Courier New", Courier, monospace;
+}
+
+body {
+  display: grid;
+  place-items: start center;
+  padding: 12px;
+}
+
+#screen {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1;
+  white-space: pre;
+  user-select: none;
+}
+
+.boat {
+  color: #2aa7ff;
+  font-weight: 700;
+}
