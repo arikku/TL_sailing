@@ -12,6 +12,33 @@ const STORAGE_KEY = "tl-ocean-solo-race-v1";
 
 const TITLE = "TL Ocean Solo Race";
 const HELP = "Arrow keys steer | A = Anchor | R = Reset";
+const APHORISMS = [
+  "The sea remembers nothing.",
+  "You are alone, but not lonely.",
+  "Time loosens its grip.",
+  "No wake lasts forever.",
+  "The map is only a suggestion.",
+  "The ocean is older than your doubts.",
+  "The wind asks no questions.",
+  "Some journeys leave no trace.",
+  "Between islands, there is space to think.",
+  "The compass points, but you decide.",
+  "Still water carries distant stories.",
+  "The sea does not hurry.",
+  "What you seek may not be land.",
+  "Even solitude has tides.",
+  "A calm sea does not mean a small journey.",
+  "You cannot sail yesterday's wind.",
+  "Direction is a choice, not a guarantee.",
+  "The longest distances are often internal.",
+  "To drift is also a form of travel.",
+  "The map changes. The sea remains.",
+  "Not all voyages require arrival.",
+  "Patience is a sailor’s true compass.",
+  "Silence is the widest ocean.",
+];
+const MIN_QUESTION_MARKS = 5;
+const MAX_QUESTION_MARKS = 8;
 const INTRO_TEXT = [
   "TL OCEAN SOLO RACE",
   "",
@@ -94,6 +121,13 @@ function randomInt(rng, min, max) {
   return Math.floor(rng() * (max - min + 1)) + min;
 }
 
+function shuffleInPlace(arr, rng) {
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = randomInt(rng, 0, i);
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
 function createSeaGrid() {
   return Array.from({ length: H }, () => Array(W).fill("."));
 }
@@ -161,6 +195,66 @@ function findWaterStart(map) {
   return { x: 0, y: 0 };
 }
 
+function generateQuestionMarks(map, start, seed) {
+  const rng = mulberry32(hashStringToInt(`qmarks:${seed}`));
+  const count = randomInt(rng, MIN_QUESTION_MARKS, MAX_QUESTION_MARKS);
+  const waterTiles = [];
+
+  for (let y = 0; y < H; y += 1) {
+    for (let x = 0; x < W; x += 1) {
+      if (map[y][x] !== ".") continue;
+      if (x === start.x && y === start.y) continue;
+      waterTiles.push({ x, y });
+    }
+  }
+
+  shuffleInPlace(waterTiles, rng);
+  const selectedTiles = waterTiles.slice(0, Math.min(count, waterTiles.length));
+
+  const aphorisms = [...APHORISMS];
+  shuffleInPlace(aphorisms, rng);
+
+  return selectedTiles.map((tile, i) => ({
+    x: tile.x,
+    y: tile.y,
+    aphorism: aphorisms[i],
+  }));
+}
+
+function consumeQuestionMarkAt(state, x, y) {
+  const idx = state.questionMarks.findIndex((qm) => qm.x === x && qm.y === y);
+  if (idx < 0) return;
+  const [picked] = state.questionMarks.splice(idx, 1);
+  state.activeAphorism = picked.aphorism;
+  state.aphorismVisible = true;
+}
+
+function splitAphorism(text, maxLineLength = 20) {
+  if (!text || text.length <= maxLineLength) return [text || ""];
+
+  const midpoint = Math.floor(text.length / 2);
+  let splitIndex = -1;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (let i = 1; i < text.length - 1; i += 1) {
+    if (text[i] !== " ") continue;
+    const left = text.slice(0, i).trim();
+    const right = text.slice(i + 1).trim();
+    if (!left || !right) continue;
+    const distance = Math.abs(i - midpoint);
+    if (distance < bestDistance) {
+      splitIndex = i;
+      bestDistance = distance;
+    }
+  }
+
+  if (splitIndex < 0) {
+    return [text.slice(0, maxLineLength), text.slice(maxLineLength)];
+  }
+
+  return [text.slice(0, splitIndex).trim(), text.slice(splitIndex + 1).trim()];
+}
+
 function forwardBlocked(state) {
   const dir = DIRS[state.boat.dir];
   const nx = state.boat.x + dir.dx;
@@ -176,8 +270,15 @@ function tryMoveOneCell(state) {
   const ny = state.boat.y + dir.dy;
   if (nx < 0 || ny < 0 || nx >= W || ny >= H) return false;
   if (state.map[ny][nx] === "#") return false;
+
+  if (state.aphorismVisible) {
+    state.aphorismVisible = false;
+    state.activeAphorism = null;
+  }
+
   state.boat.x = nx;
   state.boat.y = ny;
+  consumeQuestionMarkAt(state, nx, ny);
   return true;
 }
 
@@ -186,6 +287,9 @@ function saveState(state) {
     seed: state.seed,
     boat: state.boat,
     lastTickMs: state.lastTickMs,
+    questionMarks: state.questionMarks,
+    activeAphorism: state.activeAphorism,
+    aphorismVisible: state.aphorismVisible,
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
 }
@@ -193,6 +297,7 @@ function saveState(state) {
 function newGame(seed) {
   const map = generateIslands(seed);
   const start = findWaterStart(map);
+  const questionMarks = generateQuestionMarks(map, start, seed);
   return {
     seed,
     map,
@@ -204,6 +309,9 @@ function newGame(seed) {
     },
     lastTickMs: nowMs(),
     sparkles: [],
+    questionMarks,
+    activeAphorism: null,
+    aphorismVisible: false,
     lastFrameMs: performance.now(),
   };
 }
@@ -230,6 +338,9 @@ function loadGame() {
       boat: { x: bx, y: by, dir, anchored },
       lastTickMs: Number(saved.lastTickMs) || nowMs(),
       sparkles: [],
+      questionMarks: Array.isArray(saved.questionMarks) ? saved.questionMarks : [],
+      activeAphorism: typeof saved.activeAphorism === "string" ? saved.activeAphorism : null,
+      aphorismVisible: Boolean(saved.aphorismVisible),
       lastFrameMs: performance.now(),
     };
 
@@ -237,6 +348,25 @@ function loadGame() {
       const start = findWaterStart(map);
       state.boat.x = start.x;
       state.boat.y = start.y;
+    }
+
+    const validAphorisms = new Set(APHORISMS);
+    state.questionMarks = state.questionMarks.filter((qm) => {
+      if (!qm || typeof qm.x !== "number" || typeof qm.y !== "number") return false;
+      if (qm.x < 0 || qm.y < 0 || qm.x >= W || qm.y >= H) return false;
+      if (map[qm.y][qm.x] !== ".") return false;
+      if (!validAphorisms.has(qm.aphorism)) return false;
+      return true;
+    });
+
+    if (state.questionMarks.length === 0) {
+      state.questionMarks = generateQuestionMarks(map, state.boat, state.seed);
+      state.activeAphorism = null;
+      state.aphorismVisible = false;
+    }
+
+    if (!state.aphorismVisible) {
+      state.activeAphorism = null;
     }
 
     return state;
@@ -324,25 +454,61 @@ function render(state) {
     sparkleMap.set(`${s.x},${s.y}`, s.ch);
   }
 
+  const questionMarkMap = new Map();
+  for (const q of state.questionMarks) {
+    questionMarkMap.set(`${q.x},${q.y}`, q);
+  }
+
   const lines = [];
   lines.push(`┌${"─".repeat(W)}┐`);
   lines.push(`│${centered(TITLE, W)}│`);
 
   for (let y = 0; y < H; y += 1) {
-    let row = "";
+    const rowCells = [];
     for (let x = 0; x < W; x += 1) {
+      const hasQuestionMark = questionMarkMap.has(`${x},${y}`);
+
       if (x === state.boat.x && y === state.boat.y) {
-        row += `<span class="boat">${DIRS[state.boat.dir].glyph}</span>`;
+        rowCells.push(`<span class="boat">${DIRS[state.boat.dir].glyph}</span>`);
         continue;
       }
+
+      if (hasQuestionMark) {
+        rowCells.push("?");
+        continue;
+      }
+
       const sparkle = sparkleMap.get(`${x},${y}`);
       if (sparkle && state.map[y][x] === ".") {
-        row += sparkle;
+        rowCells.push(sparkle);
       } else {
-        row += escapeHtml(state.map[y][x]);
+        rowCells.push(escapeHtml(state.map[y][x]));
       }
     }
-    lines.push(`│${row}│`);
+    lines.push(`│${rowCells.join("")}│`);
+  }
+
+  if (state.aphorismVisible && state.activeAphorism) {
+    const aphorismLines = splitAphorism(state.activeAphorism, 20).slice(0, 2);
+    let startY = state.boat.y - aphorismLines.length;
+    if (startY < 0) {
+      startY = state.boat.y + 1;
+    }
+    startY = clamp(startY, 0, H - aphorismLines.length);
+
+    for (let i = 0; i < aphorismLines.length; i += 1) {
+      const text = aphorismLines[i];
+      const y = startY + i;
+      let startX = Math.floor(state.boat.x - text.length / 2);
+      startX = clamp(startX, 0, W - text.length);
+
+      const rowIndex = y + 2;
+      const rowChars = lines[rowIndex].slice(1, -1).split("");
+      for (let c = 0; c < text.length; c += 1) {
+        rowChars[startX + c] = escapeHtml(text[c]);
+      }
+      lines[rowIndex] = `│${rowChars.join("")}│`;
+    }
   }
 
   const mode = state.boat.anchored ? "ANCHORED" : "SAILING";
