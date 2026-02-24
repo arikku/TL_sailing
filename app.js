@@ -12,6 +12,26 @@ const STORAGE_KEY = "tl-ocean-solo-race-v1";
 
 const TITLE = "TL Ocean Solo Race";
 const HELP = "Arrow keys steer | A = Anchor | R = Reset";
+const INTRO_TEXT = [
+  "TL OCEAN SOLO RACE",
+  "",
+  "> Inspired by historic solo ocean races.",
+  "> A single sailor.",
+  "> A changing world.",
+  "",
+  "No crowds.",
+  "No timers.",
+  "No pressure.",
+  "",
+  "Each reset generates a new archipelago.",
+  "Each voyage stands alone.",
+  "",
+  "Navigate with patience.",
+  "Anchor when needed.",
+  "Sail at your own rhythm.",
+  "",
+  "Press START SAILING to begin.",
+];
 
 const DIRS = {
   N: { dx: 0, dy: -1, glyph: "▲" },
@@ -336,16 +356,94 @@ function render(state) {
   screen.innerHTML = lines.join("\n");
 }
 
+function renderIntro() {
+  const lines = [];
+  lines.push(`┌${"─".repeat(W)}┐`);
+  lines.push(`│${centered(TITLE, W)}│`);
+
+  const buttonLabel = "[ START SAILING ]";
+  const hintLabel = "Press Enter / Space / S";
+  const contentWidth = Math.max(...INTRO_TEXT.map((line) => line.length), buttonLabel.length, hintLabel.length);
+  const windowWidth = contentWidth + 4;
+  const windowHeight = INTRO_TEXT.length + 6;
+  const leftPad = Math.floor((W - windowWidth) / 2);
+  const topPad = Math.floor((H - windowHeight) / 2);
+
+  for (let y = 0; y < H; y += 1) {
+    let row = " ".repeat(W);
+
+    if (y >= topPad && y < topPad + windowHeight) {
+      const localY = y - topPad;
+      if (localY === 0 || localY === windowHeight - 1) {
+        row = `${" ".repeat(leftPad)}+${"-".repeat(windowWidth - 2)}+${" ".repeat(W - leftPad - windowWidth)}`;
+      } else {
+        const contentRow = localY - 1;
+        let inner = " ".repeat(windowWidth - 2);
+        const textIndex = contentRow - 1;
+
+        if (textIndex >= 0 && textIndex < INTRO_TEXT.length) {
+          inner = centered(INTRO_TEXT[textIndex], windowWidth - 2);
+        }
+
+        if (contentRow === INTRO_TEXT.length + 2) {
+          const buttonPadLeft = Math.floor((windowWidth - 2 - buttonLabel.length) / 2);
+          const buttonPadRight = windowWidth - 2 - buttonLabel.length - buttonPadLeft;
+          inner = `${" ".repeat(buttonPadLeft)}<span class="intro-start" role="button" tabindex="0" aria-label="Start Sailing" data-start="true">${buttonLabel}</span>${" ".repeat(buttonPadRight)}`;
+        }
+
+        if (contentRow === INTRO_TEXT.length + 3) {
+          inner = centered(hintLabel, windowWidth - 2);
+        }
+
+        row = `${" ".repeat(leftPad)}|${inner}|${" ".repeat(W - leftPad - windowWidth)}`;
+      }
+    }
+
+    lines.push(`│${row}│`);
+  }
+
+  lines.push(`│${fitLine("", W)}│`);
+  lines.push(`│${fitLine("", W)}│`);
+  lines.push(`└${"─".repeat(W)}┘`);
+
+  screen.innerHTML = lines.join("\n");
+}
+
 function setNotice(text, ms = 1800) {
   notice = text;
   noticeUntil = nowMs() + ms;
 }
 
+let gameState = "intro";
 let game = loadGame();
-applyCatchUp(game);
-saveState(game);
+
+function startSailing() {
+  if (gameState !== "intro") return;
+  const seed = Math.floor(nowMs() % 1_000_000_000);
+  game = newGame(seed);
+  saveState(game);
+  notice = "";
+  noticeUntil = 0;
+  resetConfirmUntil = 0;
+  gameState = "playing";
+}
+
+screen.addEventListener("click", (e) => {
+  const target = e.target;
+  if (target instanceof HTMLElement && target.dataset.start === "true") {
+    startSailing();
+  }
+});
 
 window.addEventListener("keydown", (e) => {
+  if (gameState === "intro") {
+    if (e.key === "Enter" || e.key === " " || e.key === "Spacebar" || e.key === "s" || e.key === "S") {
+      e.preventDefault();
+      startSailing();
+    }
+    return;
+  }
+
   if (e.key.startsWith("Arrow")) {
     e.preventDefault();
     if (e.key === "ArrowUp") game.boat.dir = "N";
@@ -382,10 +480,14 @@ function frame(nowPerf) {
   const dt = nowPerf - game.lastFrameMs;
   game.lastFrameMs = nowPerf;
 
-  processLiveTicks(game);
-  maybeAddSparkles(game, dt);
-  pruneSparkles(game, nowPerf);
-  render(game);
+  if (gameState === "playing") {
+    processLiveTicks(game);
+    maybeAddSparkles(game, dt);
+    pruneSparkles(game, nowPerf);
+    render(game);
+  } else {
+    renderIntro();
+  }
   requestAnimationFrame(frame);
 }
 
