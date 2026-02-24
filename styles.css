@@ -29,3 +29,10 @@ body {
   color: #2aa7ff;
   font-weight: 700;
 }
+
+.intro-start {
+  color: #060a10;
+  background: #d7dde8;
+  font-weight: 700;
+  cursor: pointer;
+}
