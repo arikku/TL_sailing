@@ -257,18 +257,26 @@ function splitAphorism(text, maxLineLength = 20) {
 
 function forwardBlocked(state) {
   const dir = DIRS[state.boat.dir];
-  const nx = state.boat.x + dir.dx;
+  let nx = state.boat.x + dir.dx;
   const ny = state.boat.y + dir.dy;
-  if (nx < 0 || ny < 0 || nx >= W || ny >= H) return true;
+
+  if (ny < 0 || ny >= H) return true;
+  if (nx < 0) nx = W - 1;
+  if (nx >= W) nx = 0;
+
   return state.map[ny][nx] === "#";
 }
 
 function tryMoveOneCell(state) {
   if (state.boat.anchored) return false;
   const dir = DIRS[state.boat.dir];
-  const nx = state.boat.x + dir.dx;
+  let nx = state.boat.x + dir.dx;
   const ny = state.boat.y + dir.dy;
-  if (nx < 0 || ny < 0 || nx >= W || ny >= H) return false;
+
+  if (ny < 0 || ny >= H) return false;
+  if (nx < 0) nx = W - 1;
+  if (nx >= W) nx = 0;
+
   if (state.map[ny][nx] === "#") return false;
 
   if (state.aphorismVisible) {
@@ -460,8 +468,8 @@ function render(state) {
   }
 
   const lines = [];
-  lines.push(`┌${"─".repeat(W)}┐`);
-  lines.push(`│${centered(TITLE, W)}│`);
+  lines.push(`─`.repeat(W));
+  lines.push(centered(TITLE, W));
 
   for (let y = 0; y < H; y += 1) {
     const rowCells = [];
@@ -485,7 +493,7 @@ function render(state) {
         rowCells.push(escapeHtml(state.map[y][x]));
       }
     }
-    lines.push(`│${rowCells.join("")}│`);
+    lines.push(rowCells.join(""));
   }
 
   if (state.aphorismVisible && state.activeAphorism) {
@@ -503,11 +511,11 @@ function render(state) {
       startX = clamp(startX, 0, W - text.length);
 
       const rowIndex = y + 2;
-      const rowChars = lines[rowIndex].slice(1, -1).split("");
+      const rowChars = lines[rowIndex].split("");
       for (let c = 0; c < text.length; c += 1) {
         rowChars[startX + c] = escapeHtml(text[c]);
       }
-      lines[rowIndex] = `│${rowChars.join("")}│`;
+      lines[rowIndex] = rowChars.join("");
     }
   }
 
@@ -515,9 +523,9 @@ function render(state) {
   const extra = noticeUntil > nowMs() && notice ? ` | ${notice}` : "";
   const status = `DIR:${state.boat.dir} POS:${state.boat.x},${state.boat.y} ${mode} SEED:${state.seed}${extra}`;
 
-  lines.push(`│${fitLine(status, W)}│`);
-  lines.push(`│${fitLine(HELP, W)}│`);
-  lines.push(`└${"─".repeat(W)}┘`);
+  lines.push(fitLine(status, W));
+  lines.push(fitLine(HELP, W));
+  lines.push(`─`.repeat(W));
 
   screen.innerHTML = lines.join("\n");
 }
@@ -530,39 +538,35 @@ function renderIntro() {
   const buttonLabel = "[ START SAILING ]";
   const hintLabel = "Press Enter / Space / S";
   const contentWidth = Math.max(...INTRO_TEXT.map((line) => line.length), buttonLabel.length, hintLabel.length);
-  const windowWidth = contentWidth + 4;
-  const windowHeight = INTRO_TEXT.length + 6;
-  const leftPad = Math.floor((W - windowWidth) / 2);
-  const topPad = Math.floor((H - windowHeight) / 2);
+  const blockWidth = contentWidth;
+  const blockHeight = INTRO_TEXT.length + 2;
+  const leftPad = Math.floor((W - blockWidth) / 2);
+  const topPad = Math.floor((H - blockHeight) / 2);
 
   for (let y = 0; y < H; y += 1) {
     let row = " ".repeat(W);
 
-    if (y >= topPad && y < topPad + windowHeight) {
+    if (y >= topPad && y < topPad + blockHeight) {
       const localY = y - topPad;
-      if (localY === 0 || localY === windowHeight - 1) {
-        row = `${" ".repeat(leftPad)}+${"-".repeat(windowWidth - 2)}+${" ".repeat(W - leftPad - windowWidth)}`;
-      } else {
-        const contentRow = localY - 1;
-        let inner = " ".repeat(windowWidth - 2);
-        const textIndex = contentRow - 1;
+      const contentRow = localY;
+      let inner = " ".repeat(blockWidth);
+      const textIndex = contentRow;
 
-        if (textIndex >= 0 && textIndex < INTRO_TEXT.length) {
-          inner = centered(INTRO_TEXT[textIndex], windowWidth - 2);
-        }
-
-        if (contentRow === INTRO_TEXT.length + 2) {
-          const buttonPadLeft = Math.floor((windowWidth - 2 - buttonLabel.length) / 2);
-          const buttonPadRight = windowWidth - 2 - buttonLabel.length - buttonPadLeft;
-          inner = `${" ".repeat(buttonPadLeft)}<span class="intro-start" role="button" tabindex="0" aria-label="Start Sailing" data-start="true">${buttonLabel}</span>${" ".repeat(buttonPadRight)}`;
-        }
-
-        if (contentRow === INTRO_TEXT.length + 3) {
-          inner = centered(hintLabel, windowWidth - 2);
-        }
-
-        row = `${" ".repeat(leftPad)}|${inner}|${" ".repeat(W - leftPad - windowWidth)}`;
+      if (textIndex >= 0 && textIndex < INTRO_TEXT.length) {
+        inner = centered(INTRO_TEXT[textIndex], blockWidth);
       }
+
+      if (contentRow === INTRO_TEXT.length) {
+        const buttonPadLeft = Math.floor((blockWidth - buttonLabel.length) / 2);
+        const buttonPadRight = blockWidth - buttonLabel.length - buttonPadLeft;
+        inner = `${" ".repeat(buttonPadLeft)}<span class="intro-start" role="button" tabindex="0" aria-label="Start Sailing" data-start="true">${buttonLabel}</span>${" ".repeat(buttonPadRight)}`;
+      }
+
+      if (contentRow === INTRO_TEXT.length + 1) {
+        inner = centered(hintLabel, blockWidth);
+      }
+
+      row = `${" ".repeat(leftPad)}${inner}${" ".repeat(W - leftPad - blockWidth)}`;
     }
 
     lines.push(`│${row}│`);
