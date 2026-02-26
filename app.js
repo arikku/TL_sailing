@@ -225,6 +225,7 @@ function consumeQuestionMarkAt(state, x, y) {
   const idx = state.questionMarks.findIndex((qm) => qm.x === x && qm.y === y);
   if (idx < 0) return;
   const [picked] = state.questionMarks.splice(idx, 1);
+  state.foundReflections += 1;
   state.activeAphorism = picked.aphorism;
   state.aphorismVisible = true;
 }
@@ -296,6 +297,8 @@ function saveState(state) {
     boat: state.boat,
     lastTickMs: state.lastTickMs,
     questionMarks: state.questionMarks,
+    foundReflections: state.foundReflections,
+    totalReflections: state.totalReflections,
     activeAphorism: state.activeAphorism,
     aphorismVisible: state.aphorismVisible,
   };
@@ -318,6 +321,8 @@ function newGame(seed) {
     lastTickMs: nowMs(),
     sparkles: [],
     questionMarks,
+    foundReflections: 0,
+    totalReflections: questionMarks.length,
     activeAphorism: null,
     aphorismVisible: false,
     lastFrameMs: performance.now(),
@@ -347,6 +352,8 @@ function loadGame() {
       lastTickMs: Number(saved.lastTickMs) || nowMs(),
       sparkles: [],
       questionMarks: Array.isArray(saved.questionMarks) ? saved.questionMarks : [],
+      foundReflections: Number(saved.foundReflections) || 0,
+      totalReflections: Number(saved.totalReflections) || 0,
       activeAphorism: typeof saved.activeAphorism === "string" ? saved.activeAphorism : null,
       aphorismVisible: Boolean(saved.aphorismVisible),
       lastFrameMs: performance.now(),
@@ -369,8 +376,14 @@ function loadGame() {
 
     if (state.questionMarks.length === 0) {
       state.questionMarks = generateQuestionMarks(map, state.boat, state.seed);
+      state.foundReflections = 0;
+      state.totalReflections = state.questionMarks.length;
       state.activeAphorism = null;
       state.aphorismVisible = false;
+    } else {
+      const fallbackTotal = state.questionMarks.length + state.foundReflections;
+      state.totalReflections = clamp(state.totalReflections || fallbackTotal, state.questionMarks.length, MAX_QUESTION_MARKS);
+      state.foundReflections = clamp(state.foundReflections, 0, state.totalReflections - state.questionMarks.length);
     }
 
     if (!state.aphorismVisible) {
@@ -521,7 +534,7 @@ function render(state) {
 
   const mode = state.boat.anchored ? "ANCHORED" : "SAILING";
   const extra = noticeUntil > nowMs() && notice ? ` | ${notice}` : "";
-  const status = `DIR:${state.boat.dir} POS:${state.boat.x},${state.boat.y} ${mode} SEED:${state.seed}${extra}`;
+  const status = `DIR:${state.boat.dir} POS:${state.boat.x},${state.boat.y} ${mode} SEED:${state.seed} Reflections:${state.foundReflections}/${state.totalReflections}${extra}`;
 
   lines.push(fitLine(status, W));
   lines.push(fitLine(HELP, W));
@@ -532,8 +545,7 @@ function render(state) {
 
 function renderIntro() {
   const lines = [];
-  lines.push(`┌${"─".repeat(W)}┐`);
-  lines.push(`│${centered(TITLE, W)}│`);
+  lines.push(centered(TITLE, W));
 
   const buttonLabel = "[ START SAILING ]";
   const hintLabel = "Press Enter / Space / S";
@@ -569,12 +581,8 @@ function renderIntro() {
       row = `${" ".repeat(leftPad)}${inner}${" ".repeat(W - leftPad - blockWidth)}`;
     }
 
-    lines.push(`│${row}│`);
+    lines.push(row);
   }
-
-  lines.push(`│${fitLine("", W)}│`);
-  lines.push(`│${fitLine("", W)}│`);
-  lines.push(`└${"─".repeat(W)}┘`);
 
   screen.innerHTML = lines.join("\n");
 }
