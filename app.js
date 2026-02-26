@@ -1,11 +1,13 @@
 /**
  * TL Ocean Solo Race core settings:
- * W/H = map width/height in characters, STEP_MS = boat movement step interval,
- * SPARKLE_RATE = expected sparkles per second over water.
+ * W/H = map width/height in characters.
  */
 const W = 160;
 const H = 45;
-const STEP_MS = 30_000;
+const BOAT_CLEAR_STEP_MS = 30_000;
+const BOAT_FRONT_STEP_MS = 20_000;
+const WEATHER_STEP_MS = 15_000;
+const WEATHER_FRONT_WIDTH = 16;
 const SPARKLE_RATE = 7;
 const MAX_CATCHUP_MS = 2 * 60 * 60 * 1000;
 const STORAGE_KEY = "tl-ocean-solo-race-v1";
@@ -221,6 +223,74 @@ function generateQuestionMarks(map, start, seed) {
   }));
 }
 
+function generateWeatherMask(seed) {
+  const rng = mulberry32(hashStringToInt(`weather:${seed}`));
+  const mask = Array.from({ length: H }, () => Array(WEATHER_FRONT_WIDTH).fill(false));
+  const minThickness = Math.max(3, Math.floor(WEATHER_FRONT_WIDTH * 0.4));
+  const maxThickness = Math.max(minThickness, Math.floor(WEATHER_FRONT_WIDTH * 0.8));
+  let center = randomInt(rng, 0, WEATHER_FRONT_WIDTH - 1);
+  let thickness = randomInt(rng, minThickness, maxThickness);
+
+  for (let y = 0; y < H; y += 1) {
+    center = clamp(center + randomInt(rng, -1, 1), 0, WEATHER_FRONT_WIDTH - 1);
+    thickness = clamp(thickness + randomInt(rng, -1, 1), minThickness, maxThickness);
+
+    const half = Math.floor(thickness / 2);
+    const startX = clamp(center - half, 0, WEATHER_FRONT_WIDTH - 1);
+    const endX = clamp(center + (thickness - half - 1), 0, WEATHER_FRONT_WIDTH - 1);
+
+    for (let x = startX; x <= endX; x += 1) {
+      mask[y][x] = true;
+    }
+  }
+
+  const holeCount = Math.max(8, Math.floor((H * WEATHER_FRONT_WIDTH) / 18));
+  for (let i = 0; i < holeCount; i += 1) {
+    const holeX = randomInt(rng, 0, WEATHER_FRONT_WIDTH - 1);
+    const holeY = randomInt(rng, 0, H - 1);
+    const holeW = randomInt(rng, 2, 3);
+    const holeH = randomInt(rng, 1, 2);
+
+    for (let dy = 0; dy < holeH; dy += 1) {
+      for (let dx = 0; dx < holeW; dx += 1) {
+        const x = holeX + dx;
+        const y = holeY + dy;
+        if (x >= 0 && x < WEATHER_FRONT_WIDTH && y >= 0 && y < H) {
+          mask[y][x] = false;
+        }
+      }
+    }
+  }
+
+  const smoothed = Array.from({ length: H }, () => Array(WEATHER_FRONT_WIDTH).fill(false));
+  for (let y = 0; y < H; y += 1) {
+    for (let x = 0; x < WEATHER_FRONT_WIDTH; x += 1) {
+      let neighbors = 0;
+      for (let dy = -1; dy <= 1; dy += 1) {
+        for (let dx = -1; dx <= 1; dx += 1) {
+          const ny = y + dy;
+          const nx = x + dx;
+          if (ny < 0 || ny >= H || nx < 0 || nx >= WEATHER_FRONT_WIDTH) continue;
+          if (mask[ny][nx]) neighbors += 1;
+        }
+      }
+      smoothed[y][x] = neighbors >= 4;
+    }
+  }
+
+  return smoothed;
+}
+
+function weatherCoversTile(state, x, y) {
+  const wrappedLocalX = ((x - state.frontOffsetX) % W + W) % W;
+  if (wrappedLocalX >= WEATHER_FRONT_WIDTH) return false;
+  return Boolean(state.weatherMask[y]?.[wrappedLocalX]);
+}
+
+function isBoatInWeatherFront(state) {
+  return weatherCoversTile(state, state.boat.x, state.boat.y);
+}
+
 function consumeQuestionMarkAt(state, x, y) {
   const idx = state.questionMarks.findIndex((qm) => qm.x === x && qm.y === y);
   if (idx < 0) return;
@@ -295,7 +365,9 @@ function saveState(state) {
   const payload = {
     seed: state.seed,
     boat: state.boat,
-    lastTickMs: state.lastTickMs,
+    nextBoatMoveAt: state.nextBoatMoveAt,
+    nextWeatherMoveAt: state.nextWeatherMoveAt,
+    frontOffsetX: state.frontOffsetX,
     questionMarks: state.questionMarks,
     foundReflections: state.foundReflections,
     totalReflections: state.totalReflections,
@@ -308,6 +380,10 @@ function saveState(state) {
 function newGame(seed) {
   const map = generateIslands(seed);
   const start = findWaterStart(map);
+  const weatherMask = generateWeatherMask(seed);
+  const weatherRng = mulberry32(hashStringToInt(`weather-start:${seed}`));
+  const startFrontOffsetX = randomInt(weatherRng, 0, W - 1);
+  const now = nowMs();
   const questionMarks = generateQuestionMarks(map, start, seed);
   return {
     seed,
@@ -318,7 +394,10 @@ function newGame(seed) {
       dir: "E",
       anchored: false,
     },
-    lastTickMs: nowMs(),
+    nextBoatMoveAt: now + BOAT_CLEAR_STEP_MS,
+    nextWeatherMoveAt: now + WEATHER_STEP_MS,
+    weatherMask,
+    frontOffsetX: startFrontOffsetX,
     sparkles: [],
     questionMarks,
     foundReflections: 0,
@@ -349,7 +428,10 @@ function loadGame() {
       seed: saved.seed,
       map,
       boat: { x: bx, y: by, dir, anchored },
-      lastTickMs: Number(saved.lastTickMs) || nowMs(),
+      nextBoatMoveAt: Number(saved.nextBoatMoveAt) || (Number(saved.lastTickMs) || nowMs()) + BOAT_CLEAR_STEP_MS,
+      nextWeatherMoveAt: Number(saved.nextWeatherMoveAt) || (Number(saved.lastTickMs) || nowMs()) + WEATHER_STEP_MS,
+      weatherMask: generateWeatherMask(saved.seed),
+      frontOffsetX: clamp(Number(saved.frontOffsetX) || randomInt(mulberry32(hashStringToInt(`weather-start:${saved.seed}`)), 0, W - 1), 0, W - 1),
       sparkles: [],
       questionMarks: Array.isArray(saved.questionMarks) ? saved.questionMarks : [],
       foundReflections: Number(saved.foundReflections) || 0,
@@ -397,52 +479,28 @@ function loadGame() {
   }
 }
 
-function applyCatchUp(state) {
-  const now = nowMs();
-  let elapsed = now - state.lastTickMs;
-  if (elapsed <= 0) return;
-
-  elapsed = Math.min(elapsed, MAX_CATCHUP_MS);
-  const steps = Math.floor(elapsed / STEP_MS);
-  if (steps <= 0) return;
-
-  if (state.boat.anchored) {
-    state.lastTickMs += steps * STEP_MS;
-    return;
-  }
-
-  if (forwardBlocked(state)) {
-    state.lastTickMs += steps * STEP_MS;
-    return;
-  }
-
-  for (let i = 0; i < steps; i += 1) {
-    const moved = tryMoveOneCell(state);
-    if (!moved) break;
-  }
-
-  state.lastTickMs += steps * STEP_MS;
-}
-
 function processLiveTicks(state) {
   const now = nowMs();
-  let elapsed = now - state.lastTickMs;
-  if (elapsed < STEP_MS) return;
+  const weatherElapsed = Math.max(0, Math.min(now - state.nextWeatherMoveAt, MAX_CATCHUP_MS));
+  const weatherSteps = now >= state.nextWeatherMoveAt ? Math.floor(weatherElapsed / WEATHER_STEP_MS) + 1 : 0;
+  let stateChanged = false;
 
-  const steps = Math.floor(elapsed / STEP_MS);
-  if (steps <= 0) return;
-
-  if (state.boat.anchored || forwardBlocked(state)) {
-    state.lastTickMs += steps * STEP_MS;
-    saveState(state);
-    return;
+  if (weatherSteps > 0) {
+    state.frontOffsetX = (state.frontOffsetX + weatherSteps) % W;
+    state.nextWeatherMoveAt += weatherSteps * WEATHER_STEP_MS;
+    stateChanged = true;
   }
 
-  for (let i = 0; i < steps; i += 1) {
-    tryMoveOneCell(state);
+  if (now >= state.nextBoatMoveAt) {
+    if (!state.boat.anchored && !forwardBlocked(state)) {
+      tryMoveOneCell(state);
+    }
+    const boatInterval = isBoatInWeatherFront(state) ? BOAT_FRONT_STEP_MS : BOAT_CLEAR_STEP_MS;
+    state.nextBoatMoveAt = now + boatInterval;
+    stateChanged = true;
   }
-  state.lastTickMs += steps * STEP_MS;
-  saveState(state);
+
+  if (stateChanged) saveState(state);
 }
 
 function maybeAddSparkles(state, dtMs) {
@@ -489,22 +547,24 @@ function render(state) {
     for (let x = 0; x < W; x += 1) {
       const hasQuestionMark = questionMarkMap.has(`${x},${y}`);
 
+      const isWater = state.map[y][x] === ".";
+      const sparkle = sparkleMap.get(`${x},${y}`);
+      let cell = sparkle && isWater ? sparkle : escapeHtml(state.map[y][x]);
+
+      if (isWater && weatherCoversTile(state, x, y)) {
+        cell = ",";
+      }
+
+      if (hasQuestionMark) {
+        cell = "?";
+      }
+
       if (x === state.boat.x && y === state.boat.y) {
         rowCells.push(`<span class="boat">${DIRS[state.boat.dir].glyph}</span>`);
         continue;
       }
 
-      if (hasQuestionMark) {
-        rowCells.push("?");
-        continue;
-      }
-
-      const sparkle = sparkleMap.get(`${x},${y}`);
-      if (sparkle && state.map[y][x] === ".") {
-        rowCells.push(sparkle);
-      } else {
-        rowCells.push(escapeHtml(state.map[y][x]));
-      }
+      rowCells.push(cell);
     }
     lines.push(rowCells.join(""));
   }
@@ -533,8 +593,9 @@ function render(state) {
   }
 
   const mode = state.boat.anchored ? "ANCHORED" : "SAILING";
+  const wx = isBoatInWeatherFront(state) ? "FRONT" : "CLEAR";
   const extra = noticeUntil > nowMs() && notice ? ` | ${notice}` : "";
-  const status = `DIR:${state.boat.dir} POS:${state.boat.x},${state.boat.y} ${mode} SEED:${state.seed} Reflections:${state.foundReflections}/${state.totalReflections}${extra}`;
+  const status = `DIR:${state.boat.dir} POS:${state.boat.x},${state.boat.y} ${mode} WX:${wx} SEED:${state.seed} Reflections:${state.foundReflections}/${state.totalReflections}${extra}`;
 
   lines.push(fitLine(status, W));
   lines.push(fitLine(HELP, W));
