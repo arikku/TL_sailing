@@ -7,7 +7,13 @@ const H = 45;
 const BOAT_CLEAR_STEP_MS = 30_000;
 const BOAT_FRONT_STEP_MS = 20_000;
 const WEATHER_STEP_MS = 15_000;
-const WEATHER_FRONT_WIDTH = 16;
+const WEATHER_FRONT_MIN_WIDTH = 24;
+const WEATHER_FRONT_MAX_WIDTH = 40;
+const WEATHER_MAX_FRONTS = 3;
+const WEATHER_INITIAL_FRONTS = 2;
+const WEATHER_SPAWN_MIN_STEPS = 4;
+const WEATHER_SPAWN_MAX_STEPS = 8;
+const WEATHER_FRONT_LIFETIME_MARGIN = WEATHER_FRONT_MAX_WIDTH;
 const SPARKLE_RATE = 7;
 const MAX_CATCHUP_MS = 2 * 60 * 60 * 1000;
 const STORAGE_KEY = "tl-ocean-solo-race-v1";
@@ -223,54 +229,54 @@ function generateQuestionMarks(map, start, seed) {
   }));
 }
 
-function generateWeatherMask(seed) {
+function generateWeatherMask(seed, width) {
   const rng = mulberry32(hashStringToInt(`weather:${seed}`));
-  const mask = Array.from({ length: H }, () => Array(WEATHER_FRONT_WIDTH).fill(false));
-  const minThickness = Math.max(3, Math.floor(WEATHER_FRONT_WIDTH * 0.4));
-  const maxThickness = Math.max(minThickness, Math.floor(WEATHER_FRONT_WIDTH * 0.8));
-  let center = randomInt(rng, 0, WEATHER_FRONT_WIDTH - 1);
+  const mask = Array.from({ length: H }, () => Array(width).fill(false));
+  const minThickness = Math.max(8, Math.floor(width * 0.55));
+  const maxThickness = Math.max(minThickness, Math.floor(width * 0.9));
+  let center = randomInt(rng, 0, width - 1);
   let thickness = randomInt(rng, minThickness, maxThickness);
 
   for (let y = 0; y < H; y += 1) {
-    center = clamp(center + randomInt(rng, -1, 1), 0, WEATHER_FRONT_WIDTH - 1);
+    center = clamp(center + randomInt(rng, -1, 1), 0, width - 1);
     thickness = clamp(thickness + randomInt(rng, -1, 1), minThickness, maxThickness);
 
     const half = Math.floor(thickness / 2);
-    const startX = clamp(center - half, 0, WEATHER_FRONT_WIDTH - 1);
-    const endX = clamp(center + (thickness - half - 1), 0, WEATHER_FRONT_WIDTH - 1);
+    const startX = clamp(center - half, 0, width - 1);
+    const endX = clamp(center + (thickness - half - 1), 0, width - 1);
 
     for (let x = startX; x <= endX; x += 1) {
       mask[y][x] = true;
     }
   }
 
-  const holeCount = Math.max(8, Math.floor((H * WEATHER_FRONT_WIDTH) / 18));
+  const holeCount = Math.max(4, Math.floor((H * width) / 40));
   for (let i = 0; i < holeCount; i += 1) {
-    const holeX = randomInt(rng, 0, WEATHER_FRONT_WIDTH - 1);
+    const holeX = randomInt(rng, 0, width - 1);
     const holeY = randomInt(rng, 0, H - 1);
-    const holeW = randomInt(rng, 2, 3);
+    const holeW = randomInt(rng, 1, 2);
     const holeH = randomInt(rng, 1, 2);
 
     for (let dy = 0; dy < holeH; dy += 1) {
       for (let dx = 0; dx < holeW; dx += 1) {
         const x = holeX + dx;
         const y = holeY + dy;
-        if (x >= 0 && x < WEATHER_FRONT_WIDTH && y >= 0 && y < H) {
+        if (x >= 0 && x < width && y >= 0 && y < H) {
           mask[y][x] = false;
         }
       }
     }
   }
 
-  const smoothed = Array.from({ length: H }, () => Array(WEATHER_FRONT_WIDTH).fill(false));
+  const smoothed = Array.from({ length: H }, () => Array(width).fill(false));
   for (let y = 0; y < H; y += 1) {
-    for (let x = 0; x < WEATHER_FRONT_WIDTH; x += 1) {
+    for (let x = 0; x < width; x += 1) {
       let neighbors = 0;
       for (let dy = -1; dy <= 1; dy += 1) {
         for (let dx = -1; dx <= 1; dx += 1) {
           const ny = y + dy;
           const nx = x + dx;
-          if (ny < 0 || ny >= H || nx < 0 || nx >= WEATHER_FRONT_WIDTH) continue;
+          if (ny < 0 || ny >= H || nx < 0 || nx >= width) continue;
           if (mask[ny][nx]) neighbors += 1;
         }
       }
@@ -281,10 +287,38 @@ function generateWeatherMask(seed) {
   return smoothed;
 }
 
+function randomWeatherSpawnSteps(seed, spawnIndex) {
+  const rng = mulberry32(hashStringToInt(`weather-spawn-delay:${seed}:${spawnIndex}`));
+  return randomInt(rng, WEATHER_SPAWN_MIN_STEPS, WEATHER_SPAWN_MAX_STEPS);
+}
+
+function createWeatherFront(seed, spawnIndex, startOffsetX = 0) {
+  const rng = mulberry32(hashStringToInt(`weather-front:${seed}:${spawnIndex}`));
+  const width = randomInt(rng, WEATHER_FRONT_MIN_WIDTH, WEATHER_FRONT_MAX_WIDTH);
+  return {
+    offsetX: startOffsetX,
+    width,
+    mask: generateWeatherMask(`${seed}:${spawnIndex}`, width),
+    ageTicks: 0,
+  };
+}
+
+function weatherFrontCoversTile(front, x, y) {
+  const wrappedLocalX = ((x - front.offsetX) % W + W) % W;
+  if (wrappedLocalX >= front.width) return false;
+  return Boolean(front.mask[y]?.[wrappedLocalX]);
+}
+
 function weatherCoversTile(state, x, y) {
-  const wrappedLocalX = ((x - state.frontOffsetX) % W + W) % W;
-  if (wrappedLocalX >= WEATHER_FRONT_WIDTH) return false;
-  return Boolean(state.weatherMask[y]?.[wrappedLocalX]);
+  return state.fronts.some((front) => weatherFrontCoversTile(front, x, y));
+}
+
+function spawnWeatherFront(state) {
+  if (state.fronts.length >= WEATHER_MAX_FRONTS) return;
+  const spawnOffsetX = 0;
+  const front = createWeatherFront(state.seed, state.weatherSpawnIndex, spawnOffsetX);
+  state.fronts.push(front);
+  state.weatherSpawnIndex += 1;
 }
 
 function isBoatInWeatherFront(state) {
@@ -367,7 +401,9 @@ function saveState(state) {
     boat: state.boat,
     nextBoatMoveAt: state.nextBoatMoveAt,
     nextWeatherMoveAt: state.nextWeatherMoveAt,
-    frontOffsetX: state.frontOffsetX,
+    fronts: state.fronts,
+    weatherSpawnInSteps: state.weatherSpawnInSteps,
+    weatherSpawnIndex: state.weatherSpawnIndex,
     questionMarks: state.questionMarks,
     foundReflections: state.foundReflections,
     totalReflections: state.totalReflections,
@@ -380,11 +416,12 @@ function saveState(state) {
 function newGame(seed) {
   const map = generateIslands(seed);
   const start = findWaterStart(map);
-  const weatherMask = generateWeatherMask(seed);
-  const weatherRng = mulberry32(hashStringToInt(`weather-start:${seed}`));
-  const startFrontOffsetX = randomInt(weatherRng, 0, W - 1);
   const now = nowMs();
   const questionMarks = generateQuestionMarks(map, start, seed);
+  const fronts = [];
+  for (let i = 0; i < WEATHER_INITIAL_FRONTS; i += 1) {
+    fronts.push(createWeatherFront(seed, i, Math.floor((i * W) / WEATHER_INITIAL_FRONTS)));
+  }
   return {
     seed,
     map,
@@ -396,8 +433,9 @@ function newGame(seed) {
     },
     nextBoatMoveAt: now + BOAT_CLEAR_STEP_MS,
     nextWeatherMoveAt: now + WEATHER_STEP_MS,
-    weatherMask,
-    frontOffsetX: startFrontOffsetX,
+    fronts,
+    weatherSpawnInSteps: randomWeatherSpawnSteps(seed, WEATHER_INITIAL_FRONTS),
+    weatherSpawnIndex: WEATHER_INITIAL_FRONTS,
     sparkles: [],
     questionMarks,
     foundReflections: 0,
@@ -430,8 +468,9 @@ function loadGame() {
       boat: { x: bx, y: by, dir, anchored },
       nextBoatMoveAt: Number(saved.nextBoatMoveAt) || (Number(saved.lastTickMs) || nowMs()) + BOAT_CLEAR_STEP_MS,
       nextWeatherMoveAt: Number(saved.nextWeatherMoveAt) || (Number(saved.lastTickMs) || nowMs()) + WEATHER_STEP_MS,
-      weatherMask: generateWeatherMask(saved.seed),
-      frontOffsetX: clamp(Number(saved.frontOffsetX) || randomInt(mulberry32(hashStringToInt(`weather-start:${saved.seed}`)), 0, W - 1), 0, W - 1),
+      fronts: [],
+      weatherSpawnInSteps: Number(saved.weatherSpawnInSteps) || randomWeatherSpawnSteps(saved.seed, 0),
+      weatherSpawnIndex: Number(saved.weatherSpawnIndex) || 0,
       sparkles: [],
       questionMarks: Array.isArray(saved.questionMarks) ? saved.questionMarks : [],
       foundReflections: Number(saved.foundReflections) || 0,
@@ -472,6 +511,45 @@ function loadGame() {
       state.activeAphorism = null;
     }
 
+    if (Array.isArray(saved.fronts) && saved.fronts.length > 0) {
+      state.fronts = saved.fronts
+        .map((front, i) => {
+          const width = clamp(Number(front?.width) || WEATHER_FRONT_MIN_WIDTH, WEATHER_FRONT_MIN_WIDTH, WEATHER_FRONT_MAX_WIDTH);
+          const mask = Array.isArray(front?.mask) ? front.mask : generateWeatherMask(`${saved.seed}:${i}`, width);
+          const normalizedMask = Array.from({ length: H }, (_, y) =>
+            Array.from({ length: width }, (_, x) => Boolean(mask[y]?.[x])),
+          );
+          return {
+            offsetX: Number(front?.offsetX) || 0,
+            width,
+            mask: normalizedMask,
+            ageTicks: Math.max(0, Number(front?.ageTicks) || 0),
+          };
+        })
+        .slice(0, WEATHER_MAX_FRONTS);
+    }
+
+    if (state.fronts.length === 0) {
+      const legacyOffset = clamp(Number(saved.frontOffsetX) || 0, 0, W - 1);
+      const legacyWidth = WEATHER_FRONT_MIN_WIDTH;
+      state.fronts = [
+        {
+          offsetX: legacyOffset,
+          width: legacyWidth,
+          mask: generateWeatherMask(saved.seed, legacyWidth),
+          ageTicks: 0,
+        },
+      ];
+      state.weatherSpawnIndex = 1;
+    }
+
+    state.weatherSpawnIndex = Math.max(state.weatherSpawnIndex, state.fronts.length);
+    state.weatherSpawnInSteps = clamp(
+      state.weatherSpawnInSteps,
+      WEATHER_SPAWN_MIN_STEPS,
+      WEATHER_SPAWN_MAX_STEPS,
+    );
+
     return state;
   } catch {
     const seed = Math.floor(nowMs() % 1_000_000_000);
@@ -486,7 +564,21 @@ function processLiveTicks(state) {
   let stateChanged = false;
 
   if (weatherSteps > 0) {
-    state.frontOffsetX = (state.frontOffsetX + weatherSteps) % W;
+    for (let i = 0; i < weatherSteps; i += 1) {
+      for (const front of state.fronts) {
+        front.offsetX = (front.offsetX + 1) % W;
+        front.ageTicks += 1;
+      }
+
+      state.fronts = state.fronts.filter((front) => front.ageTicks <= W + front.width + WEATHER_FRONT_LIFETIME_MARGIN);
+
+      state.weatherSpawnInSteps -= 1;
+      if (state.weatherSpawnInSteps <= 0) {
+        spawnWeatherFront(state);
+        state.weatherSpawnInSteps = randomWeatherSpawnSteps(state.seed, state.weatherSpawnIndex);
+      }
+    }
+
     state.nextWeatherMoveAt += weatherSteps * WEATHER_STEP_MS;
     stateChanged = true;
   }
