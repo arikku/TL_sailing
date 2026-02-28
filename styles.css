@@ -6,7 +6,7 @@ html,
 body {
   margin: 0;
   min-height: 100%;
-  background: #060a10;
+  background: #000;
   color: #d7dde8;
   font-family: "Courier New", Courier, monospace;
 }
@@ -26,12 +26,33 @@ body {
 }
 
 .boat {
-  color: #2aa7ff;
+  color: #ff5252;
   font-weight: 700;
 }
 
+.water {
+  color: #1e3a8a;
+}
+
+.weather {
+  color: #4fa3ff;
+}
+
+.land {
+  color: #30b458;
+}
+
+.question {
+  color: #ffe066;
+  font-weight: 700;
+}
+
+.aphorism {
+  color: #f4f7ff;
+}
+
 .intro-start {
-  color: #060a10;
+  color: #000;
   background: #d7dde8;
   font-weight: 700;
   cursor: pointer;
