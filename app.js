@@ -20,7 +20,7 @@ const STORAGE_KEY = "tl-ocean-solo-race-v1";
 const CONTEXT_MESSAGE_MS = 5_000;
 
 const TITLE = "TL Ocean Solo Race";
-const HELP = "Arrow keys steer | A = Anchor | R = Reset";
+const HELP = "Arrow keys steer | A = Anchor | I = Logbook | R = Reset";
 const APHORISMS = [
   "The sea remembers nothing.",
   "You are alone, but not lonely.",
@@ -362,6 +362,11 @@ function formatVoyageTime(msElapsed) {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
+function voyageElapsedMs(state, now = nowMs()) {
+  const activePauseMs = state.pauseStartedAt ? now - state.pauseStartedAt : 0;
+  return Math.max(0, now - state.voyageStartAt - state.pausedMs - activePauseMs);
+}
+
 function splitAphorism(text, maxLineLength = 20) {
   if (!text || text.length <= maxLineLength) return [text || ""];
 
@@ -440,6 +445,8 @@ function saveState(state) {
     aphorismVisible: state.aphorismVisible,
     distanceNm: state.distanceNm,
     voyageStartAt: state.voyageStartAt,
+    pausedMs: state.pausedMs,
+    reflectionsCompleteShown: state.reflectionsCompleteShown,
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
 }
@@ -479,6 +486,9 @@ function newGame(seed) {
     },
     distanceNm: 0,
     voyageStartAt: now,
+    pausedMs: 0,
+    pauseStartedAt: 0,
+    reflectionsCompleteShown: false,
     lastFrameMs: performance.now(),
   };
 }
@@ -517,6 +527,9 @@ function loadGame() {
       floatingText: null,
       distanceNm: Math.max(0, Number(saved.distanceNm) || 0),
       voyageStartAt: Number(saved.voyageStartAt) || nowMs(),
+      pausedMs: Math.max(0, Number(saved.pausedMs) || 0),
+      pauseStartedAt: 0,
+      reflectionsCompleteShown: Boolean(saved.reflectionsCompleteShown),
       lastFrameMs: performance.now(),
     };
 
@@ -731,13 +744,38 @@ function render(state) {
   }
 
   const wx = isBoatInWeatherFront(state) ? "FRONT" : "CLEAR";
-  const voyage = formatVoyageTime(nowMs() - state.voyageStartAt);
+  const voyage = formatVoyageTime(voyageElapsedMs(state));
   const extra = noticeUntil > nowMs() && notice ? ` | ${notice}` : "";
   const status = `DIR: ${state.boat.dir}   POS: ${state.boat.x},${state.boat.y}   Log: ${state.distanceNm} nm   Voyage: ${voyage}   Reflections: ${state.foundReflections}/${state.totalReflections}   WX: ${wx}${extra}`;
 
   lines.push(fitLine(status, W));
   lines.push(fitLine(HELP, W));
   lines.push(`─`.repeat(W));
+
+  screen.innerHTML = lines.join("\n");
+}
+
+function renderCenteredOverlay(contentLines, baseLines = null) {
+  const lines = baseLines ? [...baseLines] : [];
+
+  const contentWidth = Math.max(...contentLines.map((line) => line.length));
+  const blockWidth = contentWidth;
+  const blockHeight = contentLines.length;
+  const leftPad = Math.floor((W - blockWidth) / 2);
+  const topPad = Math.floor((H - blockHeight) / 2);
+
+  for (let y = 0; y < H; y += 1) {
+    let row = baseLines ? lines[y] : " ".repeat(W);
+
+    if (y >= topPad && y < topPad + blockHeight) {
+      const contentRow = y - topPad;
+      const inner = centered(contentLines[contentRow], blockWidth);
+      row = `${" ".repeat(leftPad)}${inner}${" ".repeat(W - leftPad - blockWidth)}`;
+    }
+
+    if (!baseLines) lines.push(row);
+    else lines[y] = row;
+  }
 
   screen.innerHTML = lines.join("\n");
 }
@@ -786,9 +824,60 @@ function renderIntro() {
   screen.innerHTML = lines.join("\n");
 }
 
+function renderLogbookOverlay(state) {
+  const lines = [
+    "LOGBOOK",
+    "",
+    "TL OCEAN SOLO RACE",
+    "",
+    "Inspired by historic solo ocean races.",
+    "A single sailor. A changing world.",
+    "",
+    `Log: ${state.distanceNm} nm`,
+    `Voyage: ${formatVoyageTime(voyageElapsedMs(state))}`,
+    `Reflections: ${state.foundReflections}/${state.totalReflections}`,
+    "",
+    "Press I to resume sailing",
+    "Press R to begin a new voyage",
+  ];
+  renderCenteredOverlay(lines);
+}
+
+function renderReflectionsCompleteOverlay() {
+  const lines = [
+    "All reflections gathered.",
+    "The sea remains open.",
+    "",
+    "Press C to continue sailing",
+    "Press R to begin a new voyage",
+  ];
+  renderCenteredOverlay(lines);
+}
+
 function setNotice(text, ms = 1800) {
   notice = text;
   noticeUntil = nowMs() + ms;
+}
+
+function enterPausedState(nextState) {
+  if (gameState !== "playing") return;
+  game.pauseStartedAt = nowMs();
+  gameState = nextState;
+}
+
+function resumePlayingFromOverlay() {
+  if (!game.pauseStartedAt) {
+    gameState = "playing";
+    return;
+  }
+
+  const pausedFor = Math.max(0, nowMs() - game.pauseStartedAt);
+  game.pausedMs += pausedFor;
+  game.nextBoatMoveAt += pausedFor;
+  game.nextWeatherMoveAt += pausedFor;
+  game.pauseStartedAt = 0;
+  gameState = "playing";
+  saveState(game);
 }
 
 let gameState = "intro";
@@ -818,6 +907,48 @@ window.addEventListener("keydown", (e) => {
       e.preventDefault();
       startSailing();
     }
+    return;
+  }
+
+  if (gameState === "logbook") {
+    if (e.key === "i" || e.key === "I") {
+      e.preventDefault();
+      resumePlayingFromOverlay();
+      return;
+    }
+
+    if (e.key === "r" || e.key === "R") {
+      e.preventDefault();
+      const newSeed = Math.floor(nowMs() % 1_000_000_000);
+      game = newGame(newSeed);
+      gameState = "playing";
+      setNotice("Game reset", 2200);
+      saveState(game);
+    }
+    return;
+  }
+
+  if (gameState === "reflectionsComplete") {
+    if (e.key === "c" || e.key === "C") {
+      e.preventDefault();
+      resumePlayingFromOverlay();
+      return;
+    }
+
+    if (e.key === "r" || e.key === "R") {
+      e.preventDefault();
+      const newSeed = Math.floor(nowMs() % 1_000_000_000);
+      game = newGame(newSeed);
+      gameState = "playing";
+      setNotice("Game reset", 2200);
+      saveState(game);
+    }
+    return;
+  }
+
+  if (e.key === "i" || e.key === "I") {
+    e.preventDefault();
+    enterPausedState("logbook");
     return;
   }
 
@@ -863,8 +994,18 @@ function frame(nowPerf) {
     maybeAddSparkles(game, dt);
     pruneSparkles(game, nowPerf);
     render(game);
-  } else {
+
+    if (!game.reflectionsCompleteShown && game.totalReflections > 0 && game.foundReflections === game.totalReflections) {
+      game.reflectionsCompleteShown = true;
+      saveState(game);
+      enterPausedState("reflectionsComplete");
+    }
+  } else if (gameState === "intro") {
     renderIntro();
+  } else if (gameState === "logbook") {
+    renderLogbookOverlay(game);
+  } else if (gameState === "reflectionsComplete") {
+    renderReflectionsCompleteOverlay();
   }
   requestAnimationFrame(frame);
 }
