@@ -75,7 +75,12 @@ const DIRS = {
   W: { dx: -1, dy: 0, glyph: "◀" },
 };
 
-const BOAT_GLYPH = ">";
+const BOAT_GLYPHS = {
+  N: "^",
+  E: ">",
+  S: "v",
+  W: "<",
+};
 
 const screen = document.getElementById("screen");
 let notice = "";
@@ -648,7 +653,7 @@ function render(state) {
       let className = "island";
 
       if (isWater) {
-        className = "water";
+        className = sparkle ? "sparkle" : "water";
       }
 
       if (isWater && weatherCoversTile(state, x, y)) {
@@ -666,7 +671,8 @@ function render(state) {
   }
 
   if (state.boat.y >= 0 && state.boat.y < H && state.boat.x >= 0 && state.boat.x < W) {
-    grid[state.boat.y][state.boat.x] = { ch: BOAT_GLYPH, cls: "boat" };
+    const boatGlyph = BOAT_GLYPHS[state.boat.dir] || ">";
+    grid[state.boat.y][state.boat.x] = { ch: boatGlyph, cls: "boat" };
   }
 
   if (state.aphorismVisible && state.activeAphorism) {
