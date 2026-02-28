@@ -75,6 +75,8 @@ const DIRS = {
   W: { dx: -1, dy: 0, glyph: "◀" },
 };
 
+const BOAT_GLYPH = ">";
+
 const screen = document.getElementById("screen");
 let notice = "";
 let noticeUntil = 0;
@@ -631,34 +633,40 @@ function render(state) {
   }
 
   const lines = [];
-  lines.push(`─`.repeat(W));
-  lines.push(centered(TITLE, W));
+  lines.push(`<span class="ui-text">${`─`.repeat(W)}</span>`);
+  lines.push(`<span class="ui-text">${centered(TITLE, W)}</span>`);
+
+  const grid = Array.from({ length: H }, () => Array.from({ length: W }, () => ({ ch: " ", cls: "ui-text" })));
 
   for (let y = 0; y < H; y += 1) {
-    const rowCells = [];
     for (let x = 0; x < W; x += 1) {
       const hasQuestionMark = questionMarkMap.has(`${x},${y}`);
 
       const isWater = state.map[y][x] === ".";
       const sparkle = sparkleMap.get(`${x},${y}`);
-      let cell = sparkle && isWater ? sparkle : escapeHtml(state.map[y][x]);
+      let cell = sparkle && isWater ? sparkle : state.map[y][x];
+      let className = "island";
+
+      if (isWater) {
+        className = "water";
+      }
 
       if (isWater && weatherCoversTile(state, x, y)) {
         cell = ",";
+        className = "weather";
       }
 
       if (hasQuestionMark) {
         cell = "?";
+        className = "ui-text";
       }
 
-      if (x === state.boat.x && y === state.boat.y) {
-        rowCells.push(`<span class="boat">${DIRS[state.boat.dir].glyph}</span>`);
-        continue;
-      }
-
-      rowCells.push(cell);
+      grid[y][x] = { ch: cell, cls: className };
     }
-    lines.push(rowCells.join(""));
+  }
+
+  if (state.boat.y >= 0 && state.boat.y < H && state.boat.x >= 0 && state.boat.x < W) {
+    grid[state.boat.y][state.boat.x] = { ch: BOAT_GLYPH, cls: "boat" };
   }
 
   if (state.aphorismVisible && state.activeAphorism) {
@@ -675,23 +683,29 @@ function render(state) {
       let startX = Math.floor(state.boat.x - text.length / 2);
       startX = clamp(startX, 0, W - text.length);
 
-      const rowIndex = y + 2;
-      const rowChars = lines[rowIndex].split("");
       for (let c = 0; c < text.length; c += 1) {
-        rowChars[startX + c] = escapeHtml(text[c]);
+        grid[y][startX + c] = { ch: text[c], cls: "ui-text" };
       }
-      lines[rowIndex] = rowChars.join("");
     }
+  }
+
+  for (let y = 0; y < H; y += 1) {
+    const rowCells = [];
+    for (let x = 0; x < W; x += 1) {
+      const cell = grid[y][x];
+      rowCells.push(`<span class="${cell.cls}">${escapeHtml(cell.ch)}</span>`);
+    }
+    lines.push(rowCells.join(""));
   }
 
   const mode = state.boat.anchored ? "ANCHORED" : "SAILING";
   const wx = isBoatInWeatherFront(state) ? "FRONT" : "CLEAR";
   const extra = noticeUntil > nowMs() && notice ? ` | ${notice}` : "";
-  const status = `DIR:${state.boat.dir} POS:${state.boat.x},${state.boat.y} ${mode} WX:${wx} SEED:${state.seed} Reflections:${state.foundReflections}/${state.totalReflections}${extra}`;
+  const status = `DIR:${state.boat.dir} POS:${state.boat.x},${state.boat.y} ${mode} WX:${wx} Reflections:${state.foundReflections}/${state.totalReflections}${extra}`;
 
-  lines.push(fitLine(status, W));
-  lines.push(fitLine(HELP, W));
-  lines.push(`─`.repeat(W));
+  lines.push(`<span class="ui-text">${fitLine(status, W)}</span>`);
+  lines.push(`<span class="ui-text">${fitLine(HELP, W)}</span>`);
+  lines.push(`<span class="ui-text">${`─`.repeat(W)}</span>`);
 
   screen.innerHTML = lines.join("\n");
 }

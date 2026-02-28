@@ -6,8 +6,8 @@ html,
 body {
   margin: 0;
   min-height: 100%;
-  background: #060a10;
-  color: #d7dde8;
+  background: #000;
+  color: #f2f4f8;
   font-family: "Courier New", Courier, monospace;
 }
 
@@ -26,13 +26,29 @@ body {
 }
 
 .boat {
-  color: #2aa7ff;
+  color: #ff4d4d;
   font-weight: 700;
 }
 
+.water {
+  color: #0b2a66;
+}
+
+.island {
+  color: #2ebd59;
+}
+
+.weather {
+  color: #4aa8ff;
+}
+
+.ui-text {
+  color: #f2f4f8;
+}
+
 .intro-start {
-  color: #060a10;
-  background: #d7dde8;
+  color: #000;
+  background: #f2f4f8;
   font-weight: 700;
   cursor: pointer;
 }
