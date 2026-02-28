@@ -17,6 +17,7 @@ const WEATHER_FRONT_LIFETIME_MARGIN = WEATHER_FRONT_MAX_WIDTH;
 const SPARKLE_RATE = 7;
 const MAX_CATCHUP_MS = 2 * 60 * 60 * 1000;
 const STORAGE_KEY = "tl-ocean-solo-race-v1";
+const CONTEXT_MESSAGE_MS = 5_000;
 
 const TITLE = "TL Ocean Solo Race";
 const HELP = "Arrow keys steer | A = Anchor | R = Reset";
@@ -334,6 +335,33 @@ function consumeQuestionMarkAt(state, x, y) {
   state.aphorismVisible = true;
 }
 
+function addFloatingText(state, text, durationMs = CONTEXT_MESSAGE_MS) {
+  state.floatingText = {
+    text,
+    expiresAt: nowMs() + durationMs,
+  };
+}
+
+function checkWeatherTransition(state, wasInFront) {
+  const inFrontNow = isBoatInWeatherFront(state);
+  if (!wasInFront && inFrontNow) {
+    addFloatingText(state, "Wind rising.");
+    return true;
+  }
+  if (wasInFront && !inFrontNow) {
+    addFloatingText(state, "Calmer waters.");
+    return true;
+  }
+  return false;
+}
+
+function formatVoyageTime(msElapsed) {
+  const totalSeconds = Math.max(0, Math.floor(msElapsed / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
 function splitAphorism(text, maxLineLength = 20) {
   if (!text || text.length <= maxLineLength) return [text || ""];
 
@@ -391,6 +419,7 @@ function tryMoveOneCell(state) {
 
   state.boat.x = nx;
   state.boat.y = ny;
+  state.distanceNm += 1;
   consumeQuestionMarkAt(state, nx, ny);
   return true;
 }
@@ -409,6 +438,8 @@ function saveState(state) {
     totalReflections: state.totalReflections,
     activeAphorism: state.activeAphorism,
     aphorismVisible: state.aphorismVisible,
+    distanceNm: state.distanceNm,
+    voyageStartAt: state.voyageStartAt,
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
 }
@@ -442,6 +473,12 @@ function newGame(seed) {
     totalReflections: questionMarks.length,
     activeAphorism: null,
     aphorismVisible: false,
+    floatingText: {
+      text: "The voyage begins.",
+      expiresAt: now + CONTEXT_MESSAGE_MS,
+    },
+    distanceNm: 0,
+    voyageStartAt: now,
     lastFrameMs: performance.now(),
   };
 }
@@ -477,6 +514,9 @@ function loadGame() {
       totalReflections: Number(saved.totalReflections) || 0,
       activeAphorism: typeof saved.activeAphorism === "string" ? saved.activeAphorism : null,
       aphorismVisible: Boolean(saved.aphorismVisible),
+      floatingText: null,
+      distanceNm: Math.max(0, Number(saved.distanceNm) || 0),
+      voyageStartAt: Number(saved.voyageStartAt) || nowMs(),
       lastFrameMs: performance.now(),
     };
 
@@ -549,7 +589,6 @@ function loadGame() {
       WEATHER_SPAWN_MIN_STEPS,
       WEATHER_SPAWN_MAX_STEPS,
     );
-
     return state;
   } catch {
     const seed = Math.floor(nowMs() % 1_000_000_000);
@@ -559,6 +598,7 @@ function loadGame() {
 
 function processLiveTicks(state) {
   const now = nowMs();
+  const wasInFront = isBoatInWeatherFront(state);
   const weatherElapsed = Math.max(0, Math.min(now - state.nextWeatherMoveAt, MAX_CATCHUP_MS));
   const weatherSteps = now >= state.nextWeatherMoveAt ? Math.floor(weatherElapsed / WEATHER_STEP_MS) + 1 : 0;
   let stateChanged = false;
@@ -592,7 +632,9 @@ function processLiveTicks(state) {
     stateChanged = true;
   }
 
-  if (stateChanged) saveState(state);
+  const weatherTransition = checkWeatherTransition(state, wasInFront);
+
+  if (stateChanged || weatherTransition) saveState(state);
 }
 
 function maybeAddSparkles(state, dtMs) {
@@ -661,8 +703,12 @@ function render(state) {
     lines.push(rowCells.join(""));
   }
 
-  if (state.aphorismVisible && state.activeAphorism) {
-    const aphorismLines = splitAphorism(state.activeAphorism, 20).slice(0, 2);
+  const floatingText =
+    state.floatingText && state.floatingText.expiresAt > nowMs() ? state.floatingText.text : null;
+  const overlayText = state.aphorismVisible && state.activeAphorism ? state.activeAphorism : floatingText;
+
+  if (overlayText) {
+    const aphorismLines = splitAphorism(overlayText, 20).slice(0, 2);
     let startY = state.boat.y - aphorismLines.length;
     if (startY < 0) {
       startY = state.boat.y + 1;
@@ -684,10 +730,10 @@ function render(state) {
     }
   }
 
-  const mode = state.boat.anchored ? "ANCHORED" : "SAILING";
   const wx = isBoatInWeatherFront(state) ? "FRONT" : "CLEAR";
+  const voyage = formatVoyageTime(nowMs() - state.voyageStartAt);
   const extra = noticeUntil > nowMs() && notice ? ` | ${notice}` : "";
-  const status = `DIR:${state.boat.dir} POS:${state.boat.x},${state.boat.y} ${mode} WX:${wx} SEED:${state.seed} Reflections:${state.foundReflections}/${state.totalReflections}${extra}`;
+  const status = `DIR: ${state.boat.dir}   POS: ${state.boat.x},${state.boat.y}   Log: ${state.distanceNm} nm   Voyage: ${voyage}   Reflections: ${state.foundReflections}/${state.totalReflections}   WX: ${wx}${extra}`;
 
   lines.push(fitLine(status, W));
   lines.push(fitLine(HELP, W));
@@ -787,6 +833,7 @@ window.addEventListener("keydown", (e) => {
 
   if (e.key === "a" || e.key === "A") {
     game.boat.anchored = !game.boat.anchored;
+    addFloatingText(game, game.boat.anchored ? "Anchored." : "Sailing.");
     setNotice(game.boat.anchored ? "Anchor dropped" : "Anchor raised");
     saveState(game);
     return;
