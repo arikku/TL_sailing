@@ -6,8 +6,8 @@ html,
 body {
   margin: 0;
   min-height: 100%;
-  background: #060a10;
-  color: #d7dde8;
+  background: #000;
+  color: #e6e6e6;
   font-family: "Courier New", Courier, monospace;
 }
 
@@ -25,14 +25,34 @@ body {
   user-select: none;
 }
 
+.water {
+  color: #0b2a5a;
+}
+
+.land {
+  color: #2ecc71;
+}
+
+.weather {
+  color: #7dff9a;
+}
+
+.question {
+  color: #ffe066;
+}
+
 .boat {
-  color: #2aa7ff;
+  color: #ff3b30;
   font-weight: 700;
 }
 
+.ui {
+  color: #e6e6e6;
+}
+
 .intro-start {
-  color: #060a10;
-  background: #d7dde8;
+  color: #000;
+  background: #e6e6e6;
   font-weight: 700;
   cursor: pointer;
 }

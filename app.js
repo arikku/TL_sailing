@@ -69,10 +69,10 @@ const INTRO_TEXT = [
 ];
 
 const DIRS = {
-  N: { dx: 0, dy: -1, glyph: "▲" },
-  E: { dx: 1, dy: 0, glyph: "▶" },
-  S: { dx: 0, dy: 1, glyph: "▼" },
-  W: { dx: -1, dy: 0, glyph: "◀" },
+  N: { dx: 0, dy: -1 },
+  E: { dx: 1, dy: 0 },
+  S: { dx: 0, dy: 1 },
+  W: { dx: -1, dy: 0 },
 };
 
 const screen = document.getElementById("screen");
@@ -631,67 +631,69 @@ function render(state) {
   }
 
   const lines = [];
-  lines.push(`─`.repeat(W));
-  lines.push(centered(TITLE, W));
+  const uiLine = (text) => text.split("").map((ch) => `<span class="ui">${escapeHtml(ch)}</span>`).join("");
+  const mapCell = (ch, cls) => `<span class="${cls}">${escapeHtml(ch)}</span>`;
+
+  lines.push(uiLine(`─`.repeat(W)));
+  lines.push(uiLine(centered(TITLE, W)));
 
   for (let y = 0; y < H; y += 1) {
-    const rowCells = [];
-    for (let x = 0; x < W; x += 1) {
-      const hasQuestionMark = questionMarkMap.has(`${x},${y}`);
+    const rowCells = Array.from({ length: W }, () => ({ ch: ".", cls: "water" }));
 
-      const isWater = state.map[y][x] === ".";
+    for (let x = 0; x < W; x += 1) {
       const sparkle = sparkleMap.get(`${x},${y}`);
-      let cell = sparkle && isWater ? sparkle : escapeHtml(state.map[y][x]);
+      const terrain = state.map[y][x];
+      const isWater = terrain === ".";
+
+      rowCells[x] = {
+        ch: sparkle && isWater ? sparkle : terrain,
+        cls: isWater ? "water" : "land",
+      };
 
       if (isWater && weatherCoversTile(state, x, y)) {
-        cell = ",";
+        rowCells[x] = { ch: ",", cls: "weather" };
       }
 
-      if (hasQuestionMark) {
-        cell = "?";
+      if (questionMarkMap.has(`${x},${y}`)) {
+        rowCells[x] = { ch: "?", cls: "question" };
       }
 
       if (x === state.boat.x && y === state.boat.y) {
-        rowCells.push(`<span class="boat">${DIRS[state.boat.dir].glyph}</span>`);
-        continue;
+        rowCells[x] = { ch: ">", cls: "boat" };
       }
-
-      rowCells.push(cell);
     }
-    lines.push(rowCells.join(""));
-  }
 
-  if (state.aphorismVisible && state.activeAphorism) {
-    const aphorismLines = splitAphorism(state.activeAphorism, 20).slice(0, 2);
-    let startY = state.boat.y - aphorismLines.length;
-    if (startY < 0) {
-      startY = state.boat.y + 1;
-    }
-    startY = clamp(startY, 0, H - aphorismLines.length);
-
-    for (let i = 0; i < aphorismLines.length; i += 1) {
-      const text = aphorismLines[i];
-      const y = startY + i;
-      let startX = Math.floor(state.boat.x - text.length / 2);
-      startX = clamp(startX, 0, W - text.length);
-
-      const rowIndex = y + 2;
-      const rowChars = lines[rowIndex].split("");
-      for (let c = 0; c < text.length; c += 1) {
-        rowChars[startX + c] = escapeHtml(text[c]);
+    if (state.aphorismVisible && state.activeAphorism) {
+      const aphorismLines = splitAphorism(state.activeAphorism, 20).slice(0, 2);
+      let startY = state.boat.y - aphorismLines.length;
+      if (startY < 0) {
+        startY = state.boat.y + 1;
       }
-      lines[rowIndex] = rowChars.join("");
+      startY = clamp(startY, 0, H - aphorismLines.length);
+
+      const localY = y - startY;
+      if (localY >= 0 && localY < aphorismLines.length) {
+        const text = aphorismLines[localY];
+        let startX = Math.floor(state.boat.x - text.length / 2);
+        startX = clamp(startX, 0, W - text.length);
+
+        for (let c = 0; c < text.length; c += 1) {
+          rowCells[startX + c] = { ch: text[c], cls: "ui" };
+        }
+      }
     }
+
+    lines.push(rowCells.map(({ ch, cls }) => mapCell(ch, cls)).join(""));
   }
 
   const mode = state.boat.anchored ? "ANCHORED" : "SAILING";
   const wx = isBoatInWeatherFront(state) ? "FRONT" : "CLEAR";
   const extra = noticeUntil > nowMs() && notice ? ` | ${notice}` : "";
-  const status = `DIR:${state.boat.dir} POS:${state.boat.x},${state.boat.y} ${mode} WX:${wx} SEED:${state.seed} Reflections:${state.foundReflections}/${state.totalReflections}${extra}`;
+  const status = `DIR:${state.boat.dir} POS:${state.boat.x},${state.boat.y} ${mode} WX:${wx} Reflections:${state.foundReflections}/${state.totalReflections}${extra}`;
 
-  lines.push(fitLine(status, W));
-  lines.push(fitLine(HELP, W));
-  lines.push(`─`.repeat(W));
+  lines.push(uiLine(fitLine(status, W)));
+  lines.push(uiLine(fitLine(HELP, W)));
+  lines.push(uiLine(`─`.repeat(W)));
 
   screen.innerHTML = lines.join("\n");
 }
