@@ -16,6 +16,7 @@ const WEATHER_SPAWN_MAX_STEPS = 8;
 const WEATHER_FRONT_LIFETIME_MARGIN = WEATHER_FRONT_MAX_WIDTH;
 const SPARKLE_RATE = 7;
 const MAX_CATCHUP_MS = 2 * 60 * 60 * 1000;
+const MAX_BOAT_STEPS = 600;
 const STORAGE_KEY = "tl-ocean-solo-race-v1";
 const CONTEXT_MESSAGE_MS = 5_000;
 
@@ -233,18 +234,33 @@ function generateQuestionMarks(map, start, seed) {
 function generateWeatherMask(seed, width) {
   const rng = mulberry32(hashStringToInt(`weather:${seed}`));
   const mask = Array.from({ length: H }, () => Array(width).fill(false));
-  const minThickness = Math.max(8, Math.floor(width * 0.55));
-  const maxThickness = Math.max(minThickness, Math.floor(width * 0.9));
+  const baseMinThickness = Math.max(6, Math.floor(width * 0.45));
+  const baseMaxThickness = Math.max(baseMinThickness + 1, Math.floor(width * 0.88));
   let center = randomInt(rng, 0, width - 1);
-  let thickness = randomInt(rng, minThickness, maxThickness);
+  let thickness = randomInt(rng, baseMinThickness, baseMaxThickness);
+  let driftVelocity = randomInt(rng, -1, 1);
 
   for (let y = 0; y < H; y += 1) {
-    center = clamp(center + randomInt(rng, -1, 1), 0, width - 1);
-    thickness = clamp(thickness + randomInt(rng, -1, 1), minThickness, maxThickness);
+    const t = H <= 1 ? 0.5 : y / (H - 1);
+    const taper = 0.55 + 0.45 * Math.sin(Math.PI * t);
 
-    const half = Math.floor(thickness / 2);
+    const burstChance = rng();
+    const burst = burstChance < 0.16 ? randomInt(rng, -3, 3) : 0;
+    const driftAdjust = randomInt(rng, -1, 1);
+    driftVelocity = clamp(driftVelocity + driftAdjust, -2, 2);
+    center = clamp(center + driftVelocity + randomInt(rng, -2, 2) + burst, 0, width - 1);
+
+    const rowThicknessNoise = randomInt(rng, -3, 3) + (rng() < 0.2 ? randomInt(rng, -2, 2) : 0);
+    thickness = clamp(thickness + randomInt(rng, -2, 2), baseMinThickness, baseMaxThickness);
+    const taperedThickness = clamp(
+      Math.round(thickness * taper) + rowThicknessNoise,
+      Math.max(3, Math.floor(baseMinThickness * 0.5)),
+      baseMaxThickness,
+    );
+
+    const half = Math.floor(taperedThickness / 2);
     const startX = clamp(center - half, 0, width - 1);
-    const endX = clamp(center + (thickness - half - 1), 0, width - 1);
+    const endX = clamp(center + (taperedThickness - half - 1), 0, width - 1);
 
     for (let x = startX; x <= endX; x += 1) {
       mask[y][x] = true;
@@ -636,12 +652,22 @@ function processLiveTicks(state) {
     stateChanged = true;
   }
 
-  if (now >= state.nextBoatMoveAt) {
+  const minBoatMoveAt = now - MAX_CATCHUP_MS;
+  if (state.nextBoatMoveAt < minBoatMoveAt) {
+    state.nextBoatMoveAt = minBoatMoveAt;
+    stateChanged = true;
+  }
+
+  let boatSteps = 0;
+  while (now >= state.nextBoatMoveAt && boatSteps < MAX_BOAT_STEPS) {
     if (!state.boat.anchored && !forwardBlocked(state)) {
       tryMoveOneCell(state);
+      stateChanged = true;
     }
+
     const boatInterval = isBoatInWeatherFront(state) ? BOAT_FRONT_STEP_MS : BOAT_CLEAR_STEP_MS;
-    state.nextBoatMoveAt = now + boatInterval;
+    state.nextBoatMoveAt += boatInterval;
+    boatSteps += 1;
     stateChanged = true;
   }
 
