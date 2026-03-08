@@ -19,6 +19,7 @@ const MAX_CATCHUP_MS = 2 * 60 * 60 * 1000;
 const MAX_BOAT_STEPS = 600;
 const STORAGE_KEY = "tl-ocean-solo-race-v1";
 const CONTEXT_MESSAGE_MS = 5_000;
+const FINAL_REFLECTION_ENDING_DELAY_MS = 5_000;
 
 const TITLE = "TL Ocean Solo Race";
 const HELP = "Arrow keys steer | A = Anchor | I = Logbook | R = Reset";
@@ -349,6 +350,28 @@ function consumeQuestionMarkAt(state, x, y) {
   state.foundReflections += 1;
   state.activeAphorism = picked.aphorism;
   state.aphorismVisible = true;
+
+  if (
+    !state.reflectionsCompleteShown &&
+    state.totalReflections > 0 &&
+    state.foundReflections === state.totalReflections &&
+    !state.reflectionsCompleteDueAt
+  ) {
+    state.reflectionsCompleteDueAt = nowMs() + FINAL_REFLECTION_ENDING_DELAY_MS;
+  }
+}
+
+function wrappedDestination(state) {
+  const dir = DIRS[state.boat.dir];
+  let nx = state.boat.x + dir.dx;
+  let ny = state.boat.y + dir.dy;
+
+  if (nx < 0) nx = W - 1;
+  if (nx >= W) nx = 0;
+  if (ny < 0) ny = H - 1;
+  if (ny >= H) ny = 0;
+
+  return { x: nx, y: ny };
 }
 
 function addFloatingText(state, text, durationMs = CONTEXT_MESSAGE_MS) {
@@ -410,26 +433,14 @@ function splitAphorism(text, maxLineLength = 20) {
 }
 
 function forwardBlocked(state) {
-  const dir = DIRS[state.boat.dir];
-  let nx = state.boat.x + dir.dx;
-  const ny = state.boat.y + dir.dy;
-
-  if (ny < 0 || ny >= H) return true;
-  if (nx < 0) nx = W - 1;
-  if (nx >= W) nx = 0;
+  const { x: nx, y: ny } = wrappedDestination(state);
 
   return state.map[ny][nx] === "#";
 }
 
 function tryMoveOneCell(state) {
   if (state.boat.anchored) return false;
-  const dir = DIRS[state.boat.dir];
-  let nx = state.boat.x + dir.dx;
-  const ny = state.boat.y + dir.dy;
-
-  if (ny < 0 || ny >= H) return false;
-  if (nx < 0) nx = W - 1;
-  if (nx >= W) nx = 0;
+  const { x: nx, y: ny } = wrappedDestination(state);
 
   if (state.map[ny][nx] === "#") return false;
 
@@ -463,6 +474,7 @@ function saveState(state) {
     voyageStartAt: state.voyageStartAt,
     pausedMs: state.pausedMs,
     reflectionsCompleteShown: state.reflectionsCompleteShown,
+    reflectionsCompleteDueAt: state.reflectionsCompleteDueAt,
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
 }
@@ -505,6 +517,7 @@ function newGame(seed) {
     pausedMs: 0,
     pauseStartedAt: 0,
     reflectionsCompleteShown: false,
+    reflectionsCompleteDueAt: 0,
     lastFrameMs: performance.now(),
   };
 }
@@ -546,6 +559,7 @@ function loadGame() {
       pausedMs: Math.max(0, Number(saved.pausedMs) || 0),
       pauseStartedAt: 0,
       reflectionsCompleteShown: Boolean(saved.reflectionsCompleteShown),
+      reflectionsCompleteDueAt: Math.max(0, Number(saved.reflectionsCompleteDueAt) || 0),
       lastFrameMs: performance.now(),
     };
 
@@ -578,6 +592,15 @@ function loadGame() {
 
     if (!state.aphorismVisible) {
       state.activeAphorism = null;
+    }
+
+    if (
+      !state.reflectionsCompleteShown &&
+      state.totalReflections > 0 &&
+      state.foundReflections === state.totalReflections &&
+      !state.reflectionsCompleteDueAt
+    ) {
+      state.reflectionsCompleteDueAt = nowMs() + FINAL_REFLECTION_ENDING_DELAY_MS;
     }
 
     if (Array.isArray(saved.fronts) && saved.fronts.length > 0) {
@@ -1021,8 +1044,13 @@ function frame(nowPerf) {
     pruneSparkles(game, nowPerf);
     render(game);
 
-    if (!game.reflectionsCompleteShown && game.totalReflections > 0 && game.foundReflections === game.totalReflections) {
+    if (
+      !game.reflectionsCompleteShown &&
+      game.reflectionsCompleteDueAt &&
+      nowMs() >= game.reflectionsCompleteDueAt
+    ) {
       game.reflectionsCompleteShown = true;
+      game.reflectionsCompleteDueAt = 0;
       saveState(game);
       enterPausedState("reflectionsComplete");
     }
